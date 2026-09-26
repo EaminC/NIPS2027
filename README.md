@@ -3,7 +3,7 @@
 Python 3.10+，仅使用标准库。前端无 npm 依赖，不加载外部资源。
 
 ```sh
-python3 demo/server.py
+python3 server.py
 ```
 
 打开 http://127.0.0.1:8765 。Ctrl+C 停止服务。数据保存在 `demo/partition-bias-lab.sqlite3`；`--port` 和 `--db` 可指定端口与独立数据库。
@@ -50,7 +50,7 @@ SQLite 的 `user_pool` 存储公共名单；`users` 是各实验的分流视图�
 
 ```sh
 python3 -m unittest discover -s demo -p 'test_*.py' -v
-node --check demo/static/app.js
+node --check static/app.js
 ```
 
 9 项内存数据库测试：共享池、层容量与参数校验、同层互斥/跨层独立、采样类型与复现、profile 稳定、指标选择与状态锁定、历史值保护、分布单位、分流 fingerprint 与 Murmur3 规则。
