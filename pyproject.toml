@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ab-aa-lab"
+version = "0.1.0"
+description = "Simulation lab for AB/AA selection bias under sticky traffic-layer hashing."
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.8"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+ab-aa-lab = "ab_aa_lab.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ab_aa_lab*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
