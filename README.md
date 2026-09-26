@@ -1,56 +1,113 @@
-# partition-bias-lab：公共用户池与流量实验 demo
+# 流量层 AB / AA 实验室
 
-Python 3.10+，仅使用标准库。前端无 npm 依赖，不加载外部资源。
+这个仓库看一件事：指标 `S(i)` 本身可以几乎不动，但流量层的 hash 一旦定死，实验者就能靠反复留下最好的桶和最差的桶，把小流量上的 AB 做大。群体均值的前后变化（AA）不会跟着变大。每次进出都重新分配时，这套做法留不住极值。
 
-```sh
+本地页面和命令行用的是同一个 runner。策略、分布、时间过程和流量层规则都通过注册表替换。
+
+## 设定
+
+| 想法 | 代码 |
+| --- | --- |
+| hackable：层内 hash 一开始定死 | `system: sticky` |
+| unhackable：每次进出流量层都重抽 | `system: reshuffle` |
+| 诚实 baseline：不挑桶，每轮重新随机，A/B 事先指定 | `strategy: honest` |
+| 五组各 20%，留下最好和最差，中间三组重分；更好就换上最好，更差就换上最差 | `strategy: extremes_keeper` |
+| 理论上界 / 下界：当前 S 下，最好的 b% 减最差的 b% | `strategy: oracle`，方向 `upper` / `lower` |
+| S(i) 的截面分布 | `metric`: `normal` / `lognormal` / `uniform` |
+| S(i) 随时间的随机过程 | `process`: `static` / `ar1` / `random_walk` |
+| 小流量 x% 再推到 100% | phase 的 `exposure`，从 `0.1` 到 `1.0` |
+| 真正的参数效应（默认没有） | `effect`: `null` / `constant_lift` |
+
+AB 是 `mean(treatment) - mean(control)`。`ab_claim` 用当前曝光样本，`ab_population` 用全体用户。AA 是群体均值相对开局的变化：`aa` 含测量层的处理效应，`aa_latent` 只含指标本身的时间过程。
+
+上下界不看 hash。在当前这批 `S` 上，任意分成两组、每组占 `arm_fraction`，最大 AB 是 `oracle_upper`，最小是 `oracle_lower`。页面上的参照界固定用 20%，和五组 hack 对齐。诚实 baseline 是两组各 50%，它自己的界更紧，不和 20% 的界画在一起。
+
+`oracle` 直接按 S 切尾部，流量层挡不住它，只作为参照。
+
+多个维护者对应多个流量层。层间 hash 独立，这里固定看其中一层。
+
+## 一轮里发生什么
+
+同一次运行里的几条对比共用一条 S 的路径，以及同一套曝光顺序。小流量用户是全量用户的嵌套子集，推全只加人。每条对比只有自己的分桶随机数。
+
+1. 若这个 phase 的 `evolve` 为真，先把 S 推进一步。
+2. 若 `strategy_active`，策略提出动作，流量层决定改不改 hash，然后策略看到新分桶。
+3. 策略给出 A/B。之后的保持或推全不再调用策略，分桶和 A/B 保持搜索结束时的样子。
+4. 记录 AB、AA 和上下界。
+
+动作和流量层：
+
+- `new_layer`：新开一层，两种系统都整层重抽。诚实 baseline 每轮都发这个。
+- `assign_all`：只给还没有 hash 的用户定桶。hackable 下再发一次不会改已有 hash。
+- `freeze_reshuffle`：hackable 留下冻结桶，只重抽其余用户；unhackable 忽略冻结，整层重抽。
+- `hold`：不动。
+
+## 运行
+
+```bash
+pip install numpy
 python3 server.py
 ```
 
-打开 http://127.0.0.1:8765 。Ctrl+C 停止服务。数据保存在 `demo/partition-bias-lab.sqlite3`；`--port` 和 `--db` 可指定端口与独立数据库。
+打开 http://127.0.0.1:8765 。`--port` 可改端口。
 
-## 当前产品流程
+页面默认用 3,000 位用户、10% 流量。五组 hack 里每组大约 60 个曝光用户，中间组重抽才容易出现更好或更差的桶，样本 AB 的抬升在图上看得清。`configs/` 里是 20,000 人：桶更大，同样的整桶替换抬不了多少，推全之后全体差值仍会回到 0 附近。
 
-1. 初始只有一份 **100,000 位唯一用户的公共池**。所有实验使用同一份 uid / ut；不再给每份实验独立生成人数，也不累加名单当总人数。
-2. 预置 **推荐策略层、排序模型层、产品体验层**。每层使用独立 salt；同层不同实验自动占用互不重叠的 bucket 区间。跨层实验独立分流，可复用用户。
-3. 新建实验选择层、1–100% 流量、至少一个观察指标。支持 5/10/20/50/100% 快捷选项。流量百分比以公共池为分母；20% 预计约 20,000 人，A/B 各占总池的 10%，实际人数由哈希决定。
-4. 草稿和停止的实验仍保留分配的区间，避免启动时冲突。停止后可以改层/改比例/改指标，保存时重新分配区间；新分组在下次启动生效。流量不足会阻止创建或保存。
-5. 启动实验，生成指标数据，点击具体指标查看 A/B 均值、均值差、分布与详细统计。支持直方图 / ECDF、实际观测 / 用户长期参数、批次切换。
+页面有两个预设：
 
-首页移除了实验总数、名单合计、指标总数和批次总数四张卡片。分流盐、bucket 区间和 revision 信息收进可折叠的底层配置区域。
+- **小流量后推全**：S 不变，在 10% 上搜索，再推到 100%。hackable 上样本 AB 会被抬高，全体桶均值仍接近 0，推全后 claim 掉回去。AA 接近 0。
+- **冻结后随时间消退**：搜索时 S 不动，然后保持分组并让 S 按 AR(1) 回归。被抬高的 AB 会消退，AA 跟着群体均值走。
 
-## 指标定义
+命令行用同一套引擎，配置在 `configs/`：
 
-| 指标 | 用户长期参数 | 每批观测 | 展示单位 |
-| --- | --- | --- | --- |
-| 点击率 | Beta(4.8,35.2) 生成固定点击概率 | 每位用户固定 20 次曝光，Binomial(20,p) / 20 × 100 | %；组间差为百分点 |
-| 人均观看时长 | 对数正态生成期望时长，总体期望 120 秒 | 使用固定期望与 sigma_log=0.5 的对数正态抽样，始终正值 | 秒 |
-| 人均播放次数 | Gamma(shape=4, scale=2) 生成固定播放率 | Poisson(rate)，非负整数 | 次 |
-
-同一用户在不同实验中使用相同指标的确定性长期参数。每批采样 seed 与指标共同决定随机序列。默认是 **A/A 模拟**：A、B 采用相同生成规则，没有内置 treatment uplift；差异来自分流构成和随机抽样。
-
-每批只生成实验选择的指标，并记录该批的 schema map。修改指标选择不会改变分流 fingerprint。旧批次保留原值与原 VID；旧版指标仅作为历史查看选项保留。
-
-## 数据与兼容
-
-SQLite 的 `user_pool` 存储公共名单；`users` 是各实验的分流视图。首次升级将原有 uid 纳入公共池，再补齐到 100,000 人，迁移当前分流配置；历史 revision、profile 和 observation 保留。当前演示数据库升级前的备份在 `demo/before-pool.sqlite3`。
-
-公共池模式关闭逐实验的名单追加入口，统一通过流量比例调整规模。数据库页可查询 Users / User Profiles / Observations / Batches / Assignment History，并导出筛选数据。历史批次人数不会因为公共池扩大而改变。
-
-## 原型边界
-
-- 浏览器形式的本地原型，尚无桌面壳与 dmg / exe。
-- 固定 3 个预置指标，尚未开放自定义 schema、导入 profile、profile 重建与 batch 删除。
-- A/B 固定 50:50；流量分配按 bucket 比例，不能保证精确人数。
-- 描述统计，未实现 Welch 检验、多重检验、condition 分面或 treatment uplift。
-- 同步生成批次；停止在本次请求完成后生效。单次最多 10 批。
-- 数据库为 demo 简化结构；不是正式 v2 的完整迁移、队列和 API 实现。
-- Murmur3 已通过已知向量和规则测试，尚未运行 Java UDF 端到端 parity harness。预置盐为 ASCII。
-
-## 验证
-
-```sh
-python3 -m unittest discover -s demo -p 'test_*.py' -v
-node --check static/app.js
+```bash
+python -m ab_aa_lab list
+python -m ab_aa_lab run configs/static_selection.json
+python -m ab_aa_lab run configs/temporal_fade.json --plot
+python -m pytest tests -q
 ```
 
-9 项内存数据库测试：共享池、层容量与参数校验、同层互斥/跨层独立、采样类型与复现、profile 稳定、指标选择与状态锁定、历史值保护、分布单位、分流 fingerprint 与 Murmur3 规则。
+`--plot` 需要 matplotlib。图分三栏：可行策略的 AB、oracle 的 AB、AA。实线是样本 claim，虚线是全体差值。
+
+全量上每个桶都很大，随机重分一次，桶均值会被压在总体均值附近，所以「整桶替换」到不了理论上界。它能做大的是小流量样本上的 AB。
+
+## 热插拔一个策略
+
+新策略是一个类，三个方法，用装饰器登记。参照 `examples/custom_strategy.py`。
+
+```python
+from ab_aa_lab.registry import strategies
+from ab_aa_lab.strategies.base import Strategy
+from ab_aa_lab.types import Action, Claim, Observation
+
+@strategies.register("my_strategy")
+class MyStrategy(Strategy):
+    def __init__(self, n_buckets: int = 5):
+        self.n_buckets = n_buckets
+
+    @property
+    def arm_fraction(self) -> float:
+        return 1.0 / self.n_buckets
+
+    def act(self, obs: Observation) -> Action:
+        return Action(kind="assign_all", n_buckets=self.n_buckets)
+
+    def observe(self, obs: Observation) -> None:
+        return None
+
+    def claim(self, obs: Observation) -> Claim:
+        return Claim(control_bucket=0, treatment_bucket=1)
+```
+
+配置里加上文件路径，路径相对该 JSON 所在目录：
+
+```json
+{
+  "plugins": ["../examples/custom_strategy.py"],
+  "strategy": {"name": "peek_once", "n_buckets": 5}
+}
+```
+
+`metric`、`process`、`policy`、`effect` 用同一套注册表。策略只能看到处理效应叠加之前的 S；`constant_lift` 只进入最后公布的 AB / AA。
+
+一次 suite 里，各条对比只能改 `name`、`system`、`strategy`、`effect`。指标、时间过程和 phase 是共用的。
