@@ -26,8 +26,8 @@ class RunSpec:
     scores: list[ScoreSpec]
 
 
-def load_run(path: Path) -> RunSpec:
-    """读实验文件。分数可以点名预设，再在自己这行改参数。"""
+def load_run(path: Path, seed: int | None = None) -> RunSpec:
+    """Read an experiment file. `seed` overrides the file default for scores that omit seed."""
     path = Path(path)
     with path.open("rb") as handle:
         data = tomllib.load(handle)
@@ -38,7 +38,7 @@ def load_run(path: Path) -> RunSpec:
     if not raw_scores:
         raise ValueError(f"{path} has no scores")
 
-    default_seed = int(data.get("seed", 0))
+    default_seed = int(data.get("seed", 0)) if seed is None else int(seed)
     scores: list[ScoreSpec] = []
     seen: set[str] = set()
     for item in raw_scores:
@@ -101,7 +101,6 @@ class StudySpec:
     seed: int
     traffic: float
     layer: str
-    buckets: int
     groups: int
     dist: Distribution
     process: str
@@ -109,8 +108,8 @@ class StudySpec:
     shock: float
 
 
-def load_study(path: Path) -> StudySpec:
-    """读 AB/AA 比较实验。分数分布和随时间的过程写在同一个文件里。"""
+def load_study(path: Path, seed: int | None = None) -> StudySpec:
+    """Read a system x agent study. `seed` overrides the file default."""
     path = Path(path)
     with path.open("rb") as handle:
         data = tomllib.load(handle)
@@ -132,10 +131,9 @@ def load_study(path: Path) -> StudySpec:
         name=str(data.get("name") or path.stem),
         users=int(data["users"]),
         rounds=int(data["rounds"]),
-        seed=int(data.get("seed", 0)),
+        seed=int(data.get("seed", 0)) if seed is None else int(seed),
         traffic=float(data.get("traffic", 1)),
         layer=str(data.get("layer") or "layer0"),
-        buckets=int(data.get("buckets", 2)),
         groups=int(data.get("groups", 5)),
         dist=dist,
         process=kind,

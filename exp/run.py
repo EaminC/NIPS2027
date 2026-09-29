@@ -47,10 +47,11 @@ def main(argv=None):
     ap.add_argument("config", nargs="?", type=Path, default=EXP_DIR / "runs" / "demo.toml")
     ap.add_argument("-M", "--num-users", type=int, default=None, help="override the user count in the file")
     ap.add_argument("-N", "--buckets", type=int, default=None, help="override the bucket count in the file")
+    ap.add_argument("--seed", type=int, default=None, help="override the file default seed for scores that omit seed")
     ap.add_argument("--out-dir", type=Path, default=None, help="default is exp/out/<experiment name>")
     args = ap.parse_args(_argv(argv))
     try:
-        run = load_run(args.config)
+        run = load_run(args.config, seed=args.seed)
     except (ValueError, OSError, tomllib.TOMLDecodeError) as exc:
         ap.error(str(exc))
     users = run.users if args.num_users is None else args.num_users

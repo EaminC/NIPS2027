@@ -1,15 +1,16 @@
-"""收益的定义。
+"""Gain definitions.
 
-AB 是当前样本里 B 组均值减去 A 组均值。
-AA 是全体用户现在的均值减去起始均值。
-上界是当前分组里最好的一组减去最差的一组，下界是反过来。
+AB: mean(B) - mean(A) on the current sample.
+AA: population mean now - population mean at the start.
+Theory upper / lower: mean(best b%) - mean(worst b%) by score on that sample
+(and the reverse). Any AB that picks two groups of size about b% cannot exceed this.
 """
 
 import numpy as np
 
 
 def ab_gain(scores: np.ndarray, arm: np.ndarray, mask: np.ndarray) -> float:
-    """arm 里 1 是 B，0 是 A，其余不进这次 AB。"""
+    """arm 1 is B, 0 is A. Other labels are out of this AB."""
     scores = np.asarray(scores, dtype=float)
     arm = np.asarray(arm)
     use = np.asarray(mask, dtype=bool)
@@ -21,7 +22,7 @@ def ab_gain(scores: np.ndarray, arm: np.ndarray, mask: np.ndarray) -> float:
 
 
 def aa_gain(before: np.ndarray, after: np.ndarray) -> float:
-    """全体用户的均值变化。"""
+    """Change in the population mean."""
     before = np.asarray(before, dtype=float)
     after = np.asarray(after, dtype=float)
     if before.size == 0 or after.size == 0:
@@ -29,8 +30,27 @@ def aa_gain(before: np.ndarray, after: np.ndarray) -> float:
     return float(after.mean() - before.mean())
 
 
+def selection_bounds(
+    scores: np.ndarray, mask: np.ndarray, fraction: float
+) -> tuple[float, float]:
+    """Theory (upper, lower): best fraction minus worst fraction by score."""
+    if not 0 < fraction <= 0.5:
+        raise ValueError("fraction must be in (0, 0.5]")
+    scores = np.asarray(scores, dtype=float)
+    use = np.asarray(mask, dtype=bool)
+    values = scores[use]
+    if values.size < 2:
+        return float("nan"), float("nan")
+    k = max(1, int(round(values.size * fraction)))
+    k = min(k, values.size // 2)
+    ordered = np.sort(values)
+    best = float(ordered[-k:].mean())
+    worst = float(ordered[:k].mean())
+    return best - worst, worst - best
+
+
 def group_bounds(scores: np.ndarray, labels: np.ndarray, mask: np.ndarray) -> tuple[float, float]:
-    """返回 (上界, 下界)。组内没有落在 mask 里的人不参与。"""
+    """Best group mean minus worst group mean on a fixed partition (and reverse)."""
     scores = np.asarray(scores, dtype=float)
     labels = np.asarray(labels)
     use = np.asarray(mask, dtype=bool)

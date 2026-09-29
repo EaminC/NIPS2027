@@ -1,9 +1,13 @@
 """分配规则。
 
-hackable：层内哈希一开始就定了，后面不再变。
-unhackable：每次进入这一层都重新随机分桶。
-honest：随机分成两组，不按分数挑哪一组当 B。
-extremes：留住最好和最差的一组，中间几组重分；更好就换掉最好，更差就换掉最差。
+System:
+  sticky_buckets     -- hackable: hash once, never change
+  unhackable_buckets -- fresh random split each entry
+
+Agent:
+  honest_arm     -- random A/B, no peeking
+  keep_extremes  -- hacker: freeze best and worst, reshuffle the middle
+  label_best_worst -- turn the extreme groups into B and A
 """
 
 import numpy as np
@@ -12,7 +16,7 @@ from abhack.utils.hash import hash_buckets
 
 
 def traffic_mask(user_ids: np.ndarray, fraction: float, layer: str) -> np.ndarray:
-    """小流量里的人。fraction 为 1 时是全体。同一个人每次都在或不在。"""
+    """People in the small-traffic sample. fraction=1 is everyone. Stable across runs."""
     if not 0 < fraction <= 1:
         raise ValueError("traffic must be in (0, 1]")
     ids = np.asarray(user_ids)
@@ -23,19 +27,19 @@ def traffic_mask(user_ids: np.ndarray, fraction: float, layer: str) -> np.ndarra
 
 
 def sticky_buckets(user_ids: np.ndarray, n_buckets: int, layer: str) -> np.ndarray:
-    """哈希一次就固定。放大到全量时，同一个人还在同一个桶。"""
+    """Hackable system: hash once. The same user stays in the same bucket at 100%."""
     return hash_buckets(user_ids, n_buckets, layer)
 
 
 def unhackable_buckets(n_users: int, n_buckets: int, rng: np.random.Generator) -> np.ndarray:
-    """这一轮重新随机分桶，不记住上一轮。"""
+    """Unhackable system: a new random split every entry. Last round is forgotten."""
     if n_buckets < 2:
         raise ValueError("bucket count must be at least 2")
     return rng.integers(0, n_buckets, size=n_users)
 
 
 def honest_arm(n_users: int, rng: np.random.Generator) -> np.ndarray:
-    """随机一半是 B。不看分数，所以不会把更好的那一半叫成 B。"""
+    """Honest agent: random half is B. Does not look at scores."""
     if n_users < 2:
         raise ValueError("need at least 2 users")
     arm = np.zeros(n_users, dtype=np.int64)
@@ -45,7 +49,7 @@ def honest_arm(n_users: int, rng: np.random.Generator) -> np.ndarray:
 
 
 def label_best_worst(labels: np.ndarray, scores: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """按 mask 里看到的均值，最好的一组标成 B，最差的一组标成 A。"""
+    """Map the best group to B and the worst group to A, using scores under mask."""
     labels = np.asarray(labels)
     scores = np.asarray(scores, dtype=float)
     mask = np.asarray(mask, dtype=bool)
@@ -72,7 +76,7 @@ def keep_extremes(
     rng: np.random.Generator,
     mask: np.ndarray,
 ) -> np.ndarray:
-    """留住最好和最差，把中间重分成同样多的组，更好或更差就替换。"""
+    """Hacker move: freeze best and worst, reshuffle the middle into the same sizes."""
     if n_groups < 3:
         raise ValueError("the extremes hack needs at least 3 groups")
     scores = np.asarray(scores, dtype=float)

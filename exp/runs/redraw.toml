@@ -1,7 +1,8 @@
-name = "hack"
+# Scores redraw iid each round. AB claims should fade even for the hacker.
+name = "redraw"
 users = 20000
 rounds = 24
-seed = 0
+seed = 1
 traffic = 0.1
 layer = "layer0"
 groups = 5
@@ -12,6 +13,4 @@ mu = 0
 sigma = 1
 
 [process]
-kind = "static"
-phi = 0.9
-shock = 0.25
+kind = "redraw"

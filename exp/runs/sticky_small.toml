@@ -1,4 +1,5 @@
-name = "hack"
+# Sticky scores, small traffic. Hacker AB claim vs the sticky-hash theory bound.
+name = "sticky_small"
 users = 20000
 rounds = 24
 seed = 0
@@ -13,5 +14,3 @@ sigma = 1
 
 [process]
 kind = "static"
-phi = 0.9
-shock = 0.25

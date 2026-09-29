@@ -1,0 +1,15 @@
+# Click-like bernoulli score. Process redraws each round.
+name = "click"
+users = 30000
+rounds = 20
+seed = 3
+traffic = 0.05
+layer = "layer0"
+groups = 5
+
+[score]
+dist = "bernoulli"
+p = 0.3
+
+[process]
+kind = "redraw"

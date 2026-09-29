@@ -1,0 +1,37 @@
+# Multi-score generation example: several named scores on one user list.
+name = "scores_mix"
+users = 10000
+buckets = 5
+layer = "layer0"
+seed = 0
+
+[presets.standard_normal]
+dist = "normal"
+mu = 0
+sigma = 1
+
+[presets.unit_uniform]
+dist = "uniform"
+low = 0
+high = 1
+
+[[scores]]
+name = "s"
+preset = "standard_normal"
+
+[[scores]]
+name = "delay"
+dist = "exponential"
+mean = 2
+seed = 1
+
+[[scores]]
+name = "u"
+preset = "unit_uniform"
+seed = 2
+
+[[scores]]
+name = "buy"
+dist = "bernoulli"
+p = 0.2
+seed = 3

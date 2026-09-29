@@ -1,4 +1,4 @@
-"""比较诚实对照、固定哈希、每次重分，以及保留极端组。
+"""Compare system x agent. Theory upper/lower sit on the system, not on the agent.
 
     python exp/study.py
     python exp/study.py exp/runs/hack.toml
@@ -23,7 +23,6 @@ EXP_DIR = Path(__file__).resolve().parent
 
 
 def _argv(argv):
-    """把全角或长破折号收成普通减号，这样 —M 和 -M 都能用。"""
     source = sys.argv[1:] if argv is None else argv
     fixed = []
     for arg in source:
@@ -36,15 +35,18 @@ def _argv(argv):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Compare AB claims, AA change, and the group bounds")
+    ap = argparse.ArgumentParser(
+        description="Compare hackable/unhackable systems with honest/hacker agents"
+    )
     ap.add_argument("config", nargs="?", type=Path, default=EXP_DIR / "runs" / "hack.toml")
     ap.add_argument("-M", "--num-users", type=int, default=None, help="override the user count")
     ap.add_argument("--rounds", type=int, default=None, help="override the number of rounds")
     ap.add_argument("--traffic", type=float, default=None, help="override the sample fraction, e.g. 0.1")
+    ap.add_argument("--seed", type=int, default=None, help="override the seed in the file (default stays the file value)")
     ap.add_argument("--out-dir", type=Path, default=None, help="default is exp/out/<experiment name>")
     args = ap.parse_args(_argv(argv))
     try:
-        study = load_study(args.config)
+        study = load_study(args.config, seed=args.seed)
     except (ValueError, OSError, tomllib.TOMLDecodeError) as exc:
         ap.error(str(exc))
     users = study.users if args.num_users is None else args.num_users
@@ -61,7 +63,6 @@ def main(argv=None):
             seed=study.seed,
             traffic=traffic,
             layer=study.layer,
-            buckets=study.buckets,
             groups=study.groups,
             phi=study.phi,
             shock=study.shock,
@@ -74,12 +75,15 @@ def main(argv=None):
     table = out / "study.csv"
     with table.open("w", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["round", "method", "ab", "ab_full", "aa", "upper", "lower"])
+        writer.writerow(
+            ["round", "system", "agent", "ab", "ab_full", "aa", "upper", "lower"]
+        )
         for row in rows:
             writer.writerow(
                 [
                     row.round,
-                    row.method,
+                    row.system,
+                    row.agent,
                     _cell(row.ab),
                     _cell(row.ab_full),
                     _cell(row.aa),
@@ -98,6 +102,7 @@ def main(argv=None):
             study.groups,
             str(table),
             rows,
+            seed=study.seed,
         )
     )
     return 0

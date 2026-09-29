@@ -1,8 +1,9 @@
-name = "hack"
+# Same sticky scores, but everyone is already in the experiment (100% traffic).
+name = "sticky_full"
 users = 20000
 rounds = 24
 seed = 0
-traffic = 0.1
+traffic = 1.0
 layer = "layer0"
 groups = 5
 
@@ -13,5 +14,3 @@ sigma = 1
 
 [process]
 kind = "static"
-phi = 0.9
-shock = 0.25

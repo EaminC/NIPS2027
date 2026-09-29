@@ -316,60 +316,68 @@ def _axis(lo: float, hi: float, width: int, color: bool) -> str:
     return _paint(left, "1;33", color) + " " * (width - len(left) - len(right)) + _paint(right, "1;33", color)
 
 
-_METHOD_COLOR = {
-    "honest": "1;32",
-    "hackable": "1;31",
-    "unhackable": "1;35",
-    "extremes": "1;33",
+_CELL_COLOR = {
+    ("hackable", "honest"): "1;32",
+    ("hackable", "hacker"): "1;31",
+    ("unhackable", "honest"): "1;36",
+    ("unhackable", "hacker"): "1;33",
 }
-_METHOD_NOTE = {
-    "honest": "Random arm each round. The better half is not renamed to B.",
-    "hackable": "Hash is fixed at the start. The better bucket is called B, and those users stay there when traffic goes to 100%.",
-    "unhackable": "Every entry into the layer is a new random split. Calling the better side B does not survive the next entry.",
-    "extremes": "Keep the best group and the worst group. Reshuffle the middle. A better new group replaces the best; a worse one replaces the worst.",
+_SYSTEM_NOTE = {
+    "hackable": "System: layer hash is fixed once. The same user stays in the same group at 100%.",
+    "unhackable": "System: every entry into the layer draws a fresh random split.",
+}
+_AGENT_NOTE = {
+    "honest": "Agent: random A/B each round. Does not peek at scores.",
+    "hacker": "Agent: keep the best and worst groups, reshuffle the middle, claim best as B.",
 }
 _SPARK = "▁▂▃▄▅▆▇█"
 
 
-def render_study(name, dist, process, users, traffic, rounds, groups, path, rows) -> str:
-    """四种做法的 AB、AA 和上下界。"""
+def render_study(name, dist, process, users, traffic, rounds, groups, path, rows, seed: int = 0) -> str:
+    """2x2 of system x agent. Upper/lower are the selection ceiling."""
     color = _color_on()
-    by: dict[str, list] = {}
+    by: dict[tuple[str, str], list] = {}
     for row in rows:
-        by.setdefault(row.method, []).append(row)
+        by.setdefault((row.system, row.agent), []).append(row)
     lines = [
         f"{_tag('Study', '1;35', color)}  {_hi(name, color)}",
         (
             f"  {_dim('users', color)}  {_hi(f'{users:,}', color)}"
             f"    {_dim('traffic', color)}  {_hi(f'{traffic:.0%}', color)}"
             f"    {_dim('rounds', color)}  {_hi(rounds, color)}"
-            f"    {_dim('extreme groups', color)}  {_hi(groups, color)}"
+            f"    {_dim('groups', color)}  {_hi(groups, color)}"
+            f"    {_dim('seed', color)}  {_hi(seed, color)}"
         ),
         f"  {_dim('score', color)}  {_hi(dist, color)}    {_dim('process', color)}  {_hi(process, color)}",
         f"  {_dim('file', color)}  {_dim(path, color)}",
         "",
+        f"  {_tag('System', '1;34', color)}  {_dim('hackable = sticky hash,  unhackable = reshuffle every entry', color)}",
+        f"  {_tag('Agent', '1;35', color)}  {_dim('honest = random A/B,  hacker = keep extremes', color)}",
         f"  {_tag('AB', '1;36', color)}  {_dim('mean(B) - mean(A) on the current sample', color)}",
         f"  {_tag('AA', '1;32', color)}  {_dim('population mean now - population mean at the start', color)}",
-        f"  {_tag('Upper', '1;33', color)}  {_dim('best current group - worst current group, on that sample', color)}",
-        f"  {_tag('Lower', '1;34', color)}  {_dim('worst current group - best current group', color)}",
+        f"  {_tag('Upper', '1;33', color)}  {_dim('theory best: mean(top b%) - mean(bottom b%) by score, b = 1/groups', color)}",
+        f"  {_tag('Lower', '1;34', color)}  {_dim('theory worst: the reverse; any group AB stays inside these', color)}",
         "",
     ]
-    for method in by:
-        code = _METHOD_COLOR.get(method, "1;37")
-        series = by[method]
-        last = series[-1]
-        lines.append(f"{_tag(method, code, color)}")
-        lines.append(f"  {_METHOD_NOTE.get(method, '')}")
-        lines.append(
-            f"  {_dim('AB sample', color)}  {_paint(_num(last.ab), code, color)}"
-            f"    {_dim('AB at 100%', color)}  {_paint(_num(last.ab_full), code, color)}"
-            f"    {_dim('AA', color)}  {_paint(_num(last.aa), '1;32', color)}"
-        )
-        lines.append(
-            f"  {_dim('upper', color)}  {_hi(_num(last.upper), color)}"
-            f"    {_dim('lower', color)}  {_hi(_num(last.lower), color)}"
-            f"    {_dim('AB over rounds', color)}  {_spark([row.ab for row in series], code, color)}"
-        )
+    for system in ("hackable", "unhackable"):
+        lines.append(f"{_tag(system, '1;34', color)}  {_dim(_SYSTEM_NOTE[system], color)}")
+        for agent in ("honest", "hacker"):
+            series = by.get((system, agent), [])
+            if not series:
+                continue
+            code = _CELL_COLOR[(system, agent)]
+            last = series[-1]
+            lines.append(f"  {_tag(agent, code, color)}  {_dim(_AGENT_NOTE[agent], color)}")
+            lines.append(
+                f"    {_dim('AB sample', color)}  {_paint(_num(last.ab), code, color)}"
+                f"    {_dim('AB at 100%', color)}  {_paint(_num(last.ab_full), code, color)}"
+                f"    {_dim('AA', color)}  {_paint(_num(last.aa), '1;32', color)}"
+            )
+            lines.append(
+                f"    {_dim('theory upper', color)}  {_hi(_num(last.upper), color)}"
+                f"    {_dim('theory lower', color)}  {_hi(_num(last.lower), color)}"
+                f"    {_dim('AB over rounds', color)}  {_spark([row.ab for row in series], code, color)}"
+            )
         lines.append("")
     return "\n".join(lines).rstrip()
 

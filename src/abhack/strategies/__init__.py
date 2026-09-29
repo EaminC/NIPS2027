@@ -1,4 +1,8 @@
-"""流量层上的分配：固定哈希、每次重抽，以及保留最好最坏组。"""
+"""Allocation rules used by the study.
+
+System: sticky_buckets / unhackable_buckets
+Agent: honest_arm / keep_extremes (+ label_best_worst)
+"""
 
 from .core import (
     honest_arm,

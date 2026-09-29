@@ -1,8 +1,93 @@
 # abhack
 
-`src` defines users, layer hashing, and scoring from a distribution. `exp` wires those three steps into an experiment.
+`src` defines users, layer hashing, and scoring from a distribution. `exp` wires those steps into experiments.
 
 User `i` is the stable integer `user_id`. On a layer, the bucket depends only on `user_id` and the layer name, so the same user stays in the same bucket if you hash again or if you hash a subset and then the full list. A score has a column name you choose. It is drawn independently from a distribution and does not look at the bucket.
+
+## System diagram
+
+```mermaid
+flowchart TB
+  subgraph Pop["Population"]
+    M["M users<br/>user_id = 0 .. M-1"]
+    S["Score S(i)<br/>iid ~ pdf, optional process over time"]
+  end
+
+  subgraph Layers["N traffic layers"]
+    L["Layer j<br/>hash(user_id, layer) → group 1 .. G"]
+  end
+
+  subgraph Traffic["Rollout"]
+    X["Small traffic x%<br/>same hash → same groups at 100%"]
+  end
+
+  subgraph System["System property"]
+    H["hackable<br/>hash fixed once"]
+    U["unhackable<br/>reshuffle every entry"]
+  end
+
+  subgraph Agent["Experimenter"]
+    O["honest<br/>random A/B, no peek"]
+    K["hacker<br/>keep best and worst,<br/>reshuffle middle"]
+  end
+
+  subgraph Out["What we measure"]
+    AB["AB = mean(B) − mean(A)<br/>on the current sample"]
+    AA["AA = pop mean now − pop mean at start"]
+    Bound["Theory upper / lower<br/>mean(top b%) − mean(bottom b%)<br/>b = 1/groups, not an experiment arm"]
+  end
+
+  M --> L
+  S --> AB
+  S --> AA
+  L --> X
+  X --> H
+  X --> U
+  H --> O
+  H --> K
+  U --> O
+  U --> K
+  O --> AB
+  K --> AB
+  S --> Bound
+```
+
+Reading order: population and score on the left; each developer owns a layer with a fixed hash; traffic can grow from x% to 100%. The **system** decides whether that hash sticks. The **agent** decides whether A/B is random or a peeking hack. Theory upper/lower are the score selection ceiling (top b% vs bottom b%), not a fifth experiment arm.
+
+## One-command setup
+
+From the repository root:
+
+```bash
+chmod +x setup
+./setup
+```
+
+That creates `.venv`, installs `abhack` into it, and runs the example configs under `exp/runs/`. Outputs land in `exp/out/<name>/`.
+
+Run a subset:
+
+```bash
+./setup hack ar1
+./setup demo scores_mix
+```
+
+Later sessions:
+
+```bash
+source .venv/bin/activate
+python exp/study.py exp/runs/hack.toml
+```
+
+Requires Python 3.10+. Dependencies are numpy and scipy (declared in `pyproject.toml`).
+
+Manual install without the script:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
 
 ## Layout
 
@@ -14,143 +99,116 @@ src/abhack/
   utils/hash.py           hash
   utils/distributions.py  distributions
   evaluate/       AB gain, AA gain, group bounds
-  strategies/     sticky hash, fresh splits, keep-extremes
+  strategies/     sticky hash, fresh splits, honest arm, keep-extremes
   process/        static, redraw, and AR(1) scores
-  study/          compare the four methods on one score path
-exp/run.py        run users, hashing, and scores from one file
-exp/study.py      run the AB / AA comparison
+  study/          system x agent comparison
+exp/run.py        generate users, buckets, and scores from one file
+exp/study.py      run the 2x2 study
+exp/runs/         example experiment configs
 exp/out/          default output directory
+setup             create .venv, install, run examples
 ```
 
-## Install
+## System x agent
 
-From the repository root:
+Two axes, and they multiply.
 
-```bash
-pip install -e .
-```
+| | **honest** (random A/B, no peeking) | **hacker** (keep best & worst, reshuffle middle) |
+| --- | --- | --- |
+| **hackable** (sticky layer hash) | baseline on a sticky system | AB claim that can survive traffic rollout |
+| **unhackable** (reshuffle every entry) | baseline on a fresh split | AB claim that does not carry to the next entry |
 
-Without installing, prefix commands with `PYTHONPATH=src`. `python exp/run.py` adds `src` to the path itself.
+**Theory upper / lower are not experiments.** They are the selection ceiling on the current sample:
 
-Requires Python 3.10+, numpy, and scipy.
+- upper = mean(top b% by score) − mean(bottom b% by score)
+- lower = the reverse
+- b = 1 / groups (five groups → 20%)
 
-## Call the pieces
+Any AB that puts about b% of users in B and about b% in A sits at or below the upper. Honest and hacker share this ceiling; only their AB numbers differ. The system decides whether a sticky hash can keep a high claim when traffic goes to 100%.
 
-Run these from the repository root. The examples write `exp/out/`.
+AB gain is mean(B) − mean(A) on the current sample. AA gain is the population mean now minus the population mean at the start. Scores stay iid from the distribution in the file unless a process moves them: `static`, `redraw`, or `ar1` (`phi`, `shock`).
 
-Write 100 users, `user_id` from `0` to `99`:
+## Worked example: `hack.toml`
 
-```python
-from abhack.users import generate_users, write_csv, read_csv
-
-ids = generate_users(100)
-write_csv(ids, "exp/out/users.csv")
-read_csv("exp/out/users.csv")[:8]
-```
-
-`write_csv(100, "exp/out/users.csv")` is the same call. A large count is written in chunks, so the ids do not all sit in memory first.
-
-Hash those users on a layer. The bucket id comes from `utils.hash`. `layer` only writes the file and checks it:
-
-```python
-from abhack.utils.hash import hash_buckets
-from abhack.layer import write_assignment, check_assignment_file
-
-hash_buckets(ids[:8], n_buckets=2, layer="layer0")
-write_assignment("exp/out/users.csv", "exp/out/layer0.csv", "layer0", 2)
-check_assignment_file("exp/out/users.csv", "exp/out/layer0.csv", "layer0", 2)
-```
-
-The check recomputes the hash and reports the count in each bucket. The file has two columns: `user_id,bucket`.
-
-Draw a score from a distribution. The column name is yours; here it is `ctr`:
-
-```python
-from abhack.utils.distributions import normal
-from abhack.metric import write_metric, check_metric_file
-
-score = normal(mu=0.0, sigma=1.0)
-score.sample(5, seed=0)
-write_metric("exp/out/users.csv", "exp/out/ctr.csv", "ctr", score, seed=0)
-check_metric_file("exp/out/ctr.csv", score, seed=0, name="ctr")
-```
-
-The check does two things: replay the same seed in user-file order, and compare the sample with the distribution. Other families are `uniform(low=0, high=10)`, `exponential(mean=2)`, and `bernoulli(p=0.3)`. With no arguments, `normal()` is standard normal, `uniform()` is `[0, 1)`, `exponential()` has mean 1, and `bernoulli()` has `p` 0.5.
-
-## Command line
-
-```bash
-python -m abhack.users -M 100000 -o exp/out/users.csv
-
-python -m abhack.layer -i exp/out/users.csv -o exp/out/layer0.csv --layer layer0 -k 2
-python -m abhack.layer --check -i exp/out/users.csv -b exp/out/layer0.csv --layer layer0 -k 2
-
-python -m abhack.metric -i exp/out/users.csv -o exp/out/ctr.csv \
-    --name ctr --dist normal --mu 0 --sigma 1 --seed 0
-python -m abhack.metric --check -i exp/out/ctr.csv \
-    --name ctr --dist normal --mu 0 --sigma 1 --seed 0
-```
-
-`--dist` is `normal`, `uniform`, `exponential`, or `bernoulli`. Add `--no-replay` to check the distribution without replaying the seed.
-
-## One file per experiment
-
-Experiments live in `exp/runs/`. One toml states the user count, the bucket count, named presets, and the scores to draw. A score can name a preset and override parameters, or it can set `dist` directly.
+Config:
 
 ```toml
-name = "demo"
-users = 10000
-buckets = 7
+name = "hack"
+users = 20000
+rounds = 24
+seed = 0
+traffic = 0.1
 layer = "layer0"
+groups = 5
 
-[presets.standard_normal]
+[score]
 dist = "normal"
 mu = 0
 sigma = 1
 
-[[scores]]
-name = "s"
-preset = "standard_normal"
-
-[[scores]]
-name = "shift"
-preset = "standard_normal"
-mu = 0.2
-sigma = 1.5
-
-[[scores]]
-name = "click"
-dist = "bernoulli"
-p = 0.5
+[process]
+kind = "static"
 ```
 
-The families are still `normal`, `uniform`, `exponential`, and `bernoulli`, defined in `src/abhack/utils/distributions.py`.
+Meaning: 20k users, scores frozen from N(0,1), 10% small traffic, five groups of ~20%, 24 rounds. Same score path for all four cells.
 
 ```bash
-python exp/run.py
-python exp/run.py exp/runs/demo.toml
-python exp/run.py exp/runs/demo.toml -M 10000 -N 3
-```
-
-`-M` and `-N` override the user count and the bucket count in the file. Results go to `exp/out/<experiment name>/`: `users.csv`, the bucket CSV, one CSV per score, and a combined `scores.csv`. The dash in flags is the ASCII `-`. The script exits non-zero if the bucket check or any score check fails. `python -m abhack...` needs `pip install -e .`, or `PYTHONPATH=src` in front of the command.
-
-## AB, AA, and a sticky-hash hack
-
-Scores stay iid from the distribution in the file. A process can then move them: `static` leaves them put, `redraw` draws a new sample each round, and `ar1` is a mean-reverting shock (`phi`, `shock`).
-
-AB gain is mean(B) minus mean(A) on the current sample. AA gain is the population mean now minus the population mean at the start. The upper bound is the best current group's mean minus the worst, on that same sample. The lower bound is the reverse. Two-group AB is the default. The extremes hack uses five groups, 20% each.
-
-Four methods share one score path:
-
-- `honest` assigns a random arm every round and does not rename the better half to B.
-- `hackable` hashes once. The better bucket is called B. The same user stays in that bucket when traffic goes from x% to 100%.
-- `unhackable` draws a new split every time a user enters the layer. Picking the better side does not survive the next entry.
-- `extremes` keeps the best group and the worst group, reshuffles the middle, and replaces an extreme when a new group beats it.
-
-```bash
-python exp/study.py
 python exp/study.py exp/runs/hack.toml
-python exp/study.py exp/runs/hack.toml -M 20000 --traffic 0.1
 ```
 
-`exp/runs/hack.toml` sets users, rounds, traffic, the score, and the process. Rows land in `exp/out/<name>/study.csv` with `ab`, `ab_full`, `aa`, `upper`, and `lower`. `ab` is the sample claim. `ab_full` is the same arm labels on every user.
+What to look for in the terminal / `exp/out/hack/study.csv`:
+
+1. **AA stays 0** — process is `static`, so the population mean does not move.
+2. **hackable × honest** — AB wanders near 0; theory upper is the top-b% vs bottom-b% ceiling.
+3. **hackable × hacker** — sample AB climbs but stays ≤ theory upper; `ab_full` is the same labels on 100% traffic.
+4. **unhackable × honest** — still near 0; same theory ceiling while scores are static.
+5. **unhackable × hacker** — sample AB can look large that round (still ≤ upper), but the next entry redraws groups.
+
+## Example experiments
+
+| file | what it shows |
+| --- | --- |
+| `exp/runs/demo.toml` | generate users, hash, several scores |
+| `exp/runs/scores_mix.toml` | more score families on one user list |
+| `exp/runs/hack.toml` | 2x2 study, static normal, 10% traffic |
+| `exp/runs/sticky_small.toml` | sticky scores, small traffic |
+| `exp/runs/sticky_full.toml` | sticky scores, 100% traffic |
+| `exp/runs/redraw.toml` | iid redraw each round |
+| `exp/runs/ar1.toml` | mean-reverting process |
+| `exp/runs/click.toml` | bernoulli clicks, redraw, 5% traffic |
+
+```bash
+python exp/run.py exp/runs/demo.toml
+python exp/run.py exp/runs/scores_mix.toml
+python exp/study.py exp/runs/hack.toml
+python exp/study.py exp/runs/ar1.toml -M 10000 --traffic 0.1
+```
+
+`-M` / `--traffic` / `--rounds` / `--seed` override the file. The file `seed` is the default; pass `--seed 7` for another draw. Study rows go to `exp/out/<name>/study.csv` with columns `system`, `agent`, `ab`, `ab_full`, `aa`, `upper`, `lower`.
+
+## Call the pieces
+
+```python
+from abhack.users import generate_users, write_csv, read_csv
+from abhack.utils.hash import hash_buckets
+from abhack.layer import write_assignment, check_assignment_file
+from abhack.utils.distributions import normal
+from abhack.metric import write_metric, check_metric_file
+
+ids = generate_users(100)
+write_csv(ids, "exp/out/users.csv")
+hash_buckets(ids[:8], n_buckets=2, layer="layer0")
+write_assignment("exp/out/users.csv", "exp/out/layer0.csv", "layer0", 2)
+score = normal(mu=0.0, sigma=1.0)
+write_metric("exp/out/users.csv", "exp/out/ctr.csv", "ctr", score, seed=0)
+check_metric_file("exp/out/ctr.csv", score, seed=0, name="ctr")
+```
+
+```bash
+python -m abhack.users -M 100000 -o exp/out/users.csv
+python -m abhack.layer -i exp/out/users.csv -o exp/out/layer0.csv --layer layer0 -k 2
+python -m abhack.metric -i exp/out/users.csv -o exp/out/ctr.csv \
+    --name ctr --dist normal --mu 0 --sigma 1 --seed 0
+```
+
+`--dist` is `normal`, `uniform`, `exponential`, or `bernoulli`. `python -m abhack...` needs the editable install from `./setup` or `pip install -e .`.
