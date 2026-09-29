@@ -1,56 +1,214 @@
-# partition-bias-lab：公共用户池与流量实验 demo
+# abhack
 
-Python 3.10+，仅使用标准库。前端无 npm 依赖，不加载外部资源。
+`src` defines users, layer hashing, and scoring from a distribution. `exp` wires those steps into experiments.
 
-```sh
-python3 server.py
+User `i` is the stable integer `user_id`. On a layer, the bucket depends only on `user_id` and the layer name, so the same user stays in the same bucket if you hash again or if you hash a subset and then the full list. A score has a column name you choose. It is drawn independently from a distribution and does not look at the bucket.
+
+## System diagram
+
+```mermaid
+flowchart TB
+  subgraph Pop["Population"]
+    M["M users<br/>user_id = 0 .. M-1"]
+    S["Score S(i)<br/>iid ~ pdf, optional process over time"]
+  end
+
+  subgraph Layers["N traffic layers"]
+    L["Layer j<br/>hash(user_id, layer) → group 1 .. G"]
+  end
+
+  subgraph Traffic["Rollout"]
+    X["Small traffic x%<br/>same hash → same groups at 100%"]
+  end
+
+  subgraph System["System property"]
+    H["hackable<br/>hash fixed once"]
+    U["unhackable<br/>reshuffle every entry"]
+  end
+
+  subgraph Agent["Experimenter"]
+    O["honest<br/>random A/B, no peek"]
+    K["hacker<br/>keep best and worst,<br/>reshuffle middle"]
+  end
+
+  subgraph Out["What we measure"]
+    AB["AB = mean(B) − mean(A)<br/>on the current sample"]
+    AA["AA = pop mean now − pop mean at start"]
+    Bound["Theory upper / lower<br/>mean(top b%) − mean(bottom b%)<br/>b = 1/groups, not an experiment arm"]
+  end
+
+  M --> L
+  S --> AB
+  S --> AA
+  L --> X
+  X --> H
+  X --> U
+  H --> O
+  H --> K
+  U --> O
+  U --> K
+  O --> AB
+  K --> AB
+  S --> Bound
 ```
 
-打开 http://127.0.0.1:8765 。Ctrl+C 停止服务。数据保存在 `demo/partition-bias-lab.sqlite3`；`--port` 和 `--db` 可指定端口与独立数据库。
+Reading order: population and score on the left; each developer owns a layer with a fixed hash; traffic can grow from x% to 100%. The **system** decides whether that hash sticks. The **agent** decides whether A/B is random or a peeking hack. Theory upper/lower are the score selection ceiling (top b% vs bottom b%), not a fifth experiment arm.
 
-## 当前产品流程
+## One-command setup
 
-1. 初始只有一份 **100,000 位唯一用户的公共池**。所有实验使用同一份 uid / ut；不再给每份实验独立生成人数，也不累加名单当总人数。
-2. 预置 **推荐策略层、排序模型层、产品体验层**。每层使用独立 salt；同层不同实验自动占用互不重叠的 bucket 区间。跨层实验独立分流，可复用用户。
-3. 新建实验选择层、1–100% 流量、至少一个观察指标。支持 5/10/20/50/100% 快捷选项。流量百分比以公共池为分母；20% 预计约 20,000 人，A/B 各占总池的 10%，实际人数由哈希决定。
-4. 草稿和停止的实验仍保留分配的区间，避免启动时冲突。停止后可以改层/改比例/改指标，保存时重新分配区间；新分组在下次启动生效。流量不足会阻止创建或保存。
-5. 启动实验，生成指标数据，点击具体指标查看 A/B 均值、均值差、分布与详细统计。支持直方图 / ECDF、实际观测 / 用户长期参数、批次切换。
+From the repository root:
 
-首页移除了实验总数、名单合计、指标总数和批次总数四张卡片。分流盐、bucket 区间和 revision 信息收进可折叠的底层配置区域。
-
-## 指标定义
-
-| 指标 | 用户长期参数 | 每批观测 | 展示单位 |
-| --- | --- | --- | --- |
-| 点击率 | Beta(4.8,35.2) 生成固定点击概率 | 每位用户固定 20 次曝光，Binomial(20,p) / 20 × 100 | %；组间差为百分点 |
-| 人均观看时长 | 对数正态生成期望时长，总体期望 120 秒 | 使用固定期望与 sigma_log=0.5 的对数正态抽样，始终正值 | 秒 |
-| 人均播放次数 | Gamma(shape=4, scale=2) 生成固定播放率 | Poisson(rate)，非负整数 | 次 |
-
-同一用户在不同实验中使用相同指标的确定性长期参数。每批采样 seed 与指标共同决定随机序列。默认是 **A/A 模拟**：A、B 采用相同生成规则，没有内置 treatment uplift；差异来自分流构成和随机抽样。
-
-每批只生成实验选择的指标，并记录该批的 schema map。修改指标选择不会改变分流 fingerprint。旧批次保留原值与原 VID；旧版指标仅作为历史查看选项保留。
-
-## 数据与兼容
-
-SQLite 的 `user_pool` 存储公共名单；`users` 是各实验的分流视图。首次升级将原有 uid 纳入公共池，再补齐到 100,000 人，迁移当前分流配置；历史 revision、profile 和 observation 保留。当前演示数据库升级前的备份在 `demo/before-pool.sqlite3`。
-
-公共池模式关闭逐实验的名单追加入口，统一通过流量比例调整规模。数据库页可查询 Users / User Profiles / Observations / Batches / Assignment History，并导出筛选数据。历史批次人数不会因为公共池扩大而改变。
-
-## 原型边界
-
-- 浏览器形式的本地原型，尚无桌面壳与 dmg / exe。
-- 固定 3 个预置指标，尚未开放自定义 schema、导入 profile、profile 重建与 batch 删除。
-- A/B 固定 50:50；流量分配按 bucket 比例，不能保证精确人数。
-- 描述统计，未实现 Welch 检验、多重检验、condition 分面或 treatment uplift。
-- 同步生成批次；停止在本次请求完成后生效。单次最多 10 批。
-- 数据库为 demo 简化结构；不是正式 v2 的完整迁移、队列和 API 实现。
-- Murmur3 已通过已知向量和规则测试，尚未运行 Java UDF 端到端 parity harness。预置盐为 ASCII。
-
-## 验证
-
-```sh
-python3 -m unittest discover -s demo -p 'test_*.py' -v
-node --check static/app.js
+```bash
+chmod +x setup
+./setup
 ```
 
-9 项内存数据库测试：共享池、层容量与参数校验、同层互斥/跨层独立、采样类型与复现、profile 稳定、指标选择与状态锁定、历史值保护、分布单位、分流 fingerprint 与 Murmur3 规则。
+That creates `.venv`, installs `abhack` into it, and runs the example configs under `exp/runs/`. Outputs land in `exp/out/<name>/`.
+
+Run a subset:
+
+```bash
+./setup hack ar1
+./setup demo scores_mix
+```
+
+Later sessions:
+
+```bash
+source .venv/bin/activate
+python exp/study.py exp/runs/hack.toml
+```
+
+Requires Python 3.10+. Dependencies are numpy and scipy (declared in `pyproject.toml`).
+
+Manual install without the script:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+## Layout
+
+```
+src/abhack/
+  users/          write and read user_id
+  layer/          write the hash to CSV and check buckets
+  metric/         draw scores and check them
+  utils/hash.py           hash
+  utils/distributions.py  distributions
+  evaluate/       AB gain, AA gain, group bounds
+  strategies/     sticky hash, fresh splits, honest arm, keep-extremes
+  process/        static, redraw, and AR(1) scores
+  study/          system x agent comparison
+exp/run.py        generate users, buckets, and scores from one file
+exp/study.py      run the 2x2 study
+exp/runs/         example experiment configs
+exp/out/          default output directory
+setup             create .venv, install, run examples
+```
+
+## System x agent
+
+Two axes, and they multiply.
+
+| | **honest** (random A/B, no peeking) | **hacker** (keep best & worst, reshuffle middle) |
+| --- | --- | --- |
+| **hackable** (sticky layer hash) | baseline on a sticky system | AB claim that can survive traffic rollout |
+| **unhackable** (reshuffle every entry) | baseline on a fresh split | AB claim that does not carry to the next entry |
+
+**Theory upper / lower are not experiments.** They are the selection ceiling on the current sample:
+
+- upper = mean(top b% by score) − mean(bottom b% by score)
+- lower = the reverse
+- b = 1 / groups (five groups → 20%)
+
+Any AB that puts about b% of users in B and about b% in A sits at or below the upper. Honest and hacker share this ceiling; only their AB numbers differ. The system decides whether a sticky hash can keep a high claim when traffic goes to 100%.
+
+AB gain is mean(B) − mean(A) on the current sample. AA gain is the population mean now minus the population mean at the start. Scores stay iid from the distribution in the file unless a process moves them: `static`, `redraw`, or `ar1` (`phi`, `shock`).
+
+## Worked example: `hack.toml`
+
+Config:
+
+```toml
+name = "hack"
+users = 20000
+rounds = 24
+seed = 0
+traffic = 0.1
+layer = "layer0"
+groups = 5
+
+[score]
+dist = "normal"
+mu = 0
+sigma = 1
+
+[process]
+kind = "static"
+```
+
+Meaning: 20k users, scores frozen from N(0,1), 10% small traffic, five groups of ~20%, 24 rounds. Same score path for all four cells.
+
+```bash
+python exp/study.py exp/runs/hack.toml
+```
+
+What to look for in the terminal / `exp/out/hack/study.csv`:
+
+1. **AA stays 0** — process is `static`, so the population mean does not move.
+2. **hackable × honest** — AB wanders near 0; theory upper is the top-b% vs bottom-b% ceiling.
+3. **hackable × hacker** — sample AB climbs but stays ≤ theory upper; `ab_full` is the same labels on 100% traffic.
+4. **unhackable × honest** — still near 0; same theory ceiling while scores are static.
+5. **unhackable × hacker** — sample AB can look large that round (still ≤ upper), but the next entry redraws groups.
+
+## Example experiments
+
+| file | what it shows |
+| --- | --- |
+| `exp/runs/demo.toml` | generate users, hash, several scores |
+| `exp/runs/scores_mix.toml` | more score families on one user list |
+| `exp/runs/hack.toml` | 2x2 study, static normal, 10% traffic |
+| `exp/runs/sticky_small.toml` | sticky scores, small traffic |
+| `exp/runs/sticky_full.toml` | sticky scores, 100% traffic |
+| `exp/runs/redraw.toml` | iid redraw each round |
+| `exp/runs/ar1.toml` | mean-reverting process |
+| `exp/runs/click.toml` | bernoulli clicks, redraw, 5% traffic |
+
+```bash
+python exp/run.py exp/runs/demo.toml
+python exp/run.py exp/runs/scores_mix.toml
+python exp/study.py exp/runs/hack.toml
+python exp/study.py exp/runs/ar1.toml -M 10000 --traffic 0.1
+```
+
+`-M` / `--traffic` / `--rounds` / `--seed` override the file. The file `seed` is the default; pass `--seed 7` for another draw. Study rows go to `exp/out/<name>/study.csv` with columns `system`, `agent`, `ab`, `ab_full`, `aa`, `upper`, `lower`.
+
+## Call the pieces
+
+```python
+from abhack.users import generate_users, write_csv, read_csv
+from abhack.utils.hash import hash_buckets
+from abhack.layer import write_assignment, check_assignment_file
+from abhack.utils.distributions import normal
+from abhack.metric import write_metric, check_metric_file
+
+ids = generate_users(100)
+write_csv(ids, "exp/out/users.csv")
+hash_buckets(ids[:8], n_buckets=2, layer="layer0")
+write_assignment("exp/out/users.csv", "exp/out/layer0.csv", "layer0", 2)
+score = normal(mu=0.0, sigma=1.0)
+write_metric("exp/out/users.csv", "exp/out/ctr.csv", "ctr", score, seed=0)
+check_metric_file("exp/out/ctr.csv", score, seed=0, name="ctr")
+```
+
+```bash
+python -m abhack.users -M 100000 -o exp/out/users.csv
+python -m abhack.layer -i exp/out/users.csv -o exp/out/layer0.csv --layer layer0 -k 2
+python -m abhack.metric -i exp/out/users.csv -o exp/out/ctr.csv \
+    --name ctr --dist normal --mu 0 --sigma 1 --seed 0
+```
+
+`--dist` is `normal`, `uniform`, `exponential`, or `bernoulli`. `python -m abhack...` needs the editable install from `./setup` or `pip install -e .`.

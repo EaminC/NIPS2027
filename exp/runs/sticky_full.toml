@@ -1,0 +1,16 @@
+# Same sticky scores, but everyone is already in the experiment (100% traffic).
+name = "sticky_full"
+users = 20000
+rounds = 24
+seed = 0
+traffic = 1.0
+layer = "layer0"
+groups = 5
+
+[score]
+dist = "normal"
+mu = 0
+sigma = 1
+
+[process]
+kind = "static"

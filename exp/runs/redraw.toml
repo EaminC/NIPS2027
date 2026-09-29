@@ -1,0 +1,16 @@
+# Scores redraw iid each round. AB claims should fade even for the hacker.
+name = "redraw"
+users = 20000
+rounds = 24
+seed = 1
+traffic = 0.1
+layer = "layer0"
+groups = 5
+
+[score]
+dist = "normal"
+mu = 0
+sigma = 1
+
+[process]
+kind = "redraw"

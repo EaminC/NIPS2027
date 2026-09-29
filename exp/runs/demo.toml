@@ -1,0 +1,27 @@
+name = "demo"
+users = 10000
+buckets = 7
+layer = "layer0"
+seed = 0
+
+[presets.standard_normal]
+dist = "normal"
+mu = 0
+sigma = 1
+
+[[scores]]
+name = "s"
+preset = "standard_normal"
+
+[[scores]]
+name = "shift"
+preset = "standard_normal"
+mu = 0.2
+sigma = 1.5
+seed = 1
+
+[[scores]]
+name = "click"
+dist = "bernoulli"
+p = 0.5
+seed = 2

@@ -1,0 +1,18 @@
+# Mean-reverting AR(1). AA moves; sticky hash can still leave an AB claim.
+name = "ar1"
+users = 20000
+rounds = 30
+seed = 2
+traffic = 0.1
+layer = "layer0"
+groups = 5
+
+[score]
+dist = "normal"
+mu = 0
+sigma = 1
+
+[process]
+kind = "ar1"
+phi = 0.9
+shock = 0.25
