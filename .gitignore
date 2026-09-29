@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 outputs/
+exp/out/
 *.sqlite3
 *.sqlite3-*
 .DS_Store

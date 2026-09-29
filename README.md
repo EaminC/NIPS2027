@@ -1,113 +1,156 @@
-# 流量层 AB / AA 实验室
+# abhack
 
-这个仓库看一件事：指标 `S(i)` 本身可以几乎不动，但流量层的 hash 一旦定死，实验者就能靠反复留下最好的桶和最差的桶，把小流量上的 AB 做大。群体均值的前后变化（AA）不会跟着变大。每次进出都重新分配时，这套做法留不住极值。
+`src` defines users, layer hashing, and scoring from a distribution. `exp` wires those three steps into an experiment.
 
-本地页面和命令行用的是同一个 runner。策略、分布、时间过程和流量层规则都通过注册表替换。
+User `i` is the stable integer `user_id`. On a layer, the bucket depends only on `user_id` and the layer name, so the same user stays in the same bucket if you hash again or if you hash a subset and then the full list. A score has a column name you choose. It is drawn independently from a distribution and does not look at the bucket.
 
-## 设定
+## Layout
 
-| 想法 | 代码 |
-| --- | --- |
-| hackable：层内 hash 一开始定死 | `system: sticky` |
-| unhackable：每次进出流量层都重抽 | `system: reshuffle` |
-| 诚实 baseline：不挑桶，每轮重新随机，A/B 事先指定 | `strategy: honest` |
-| 五组各 20%，留下最好和最差，中间三组重分；更好就换上最好，更差就换上最差 | `strategy: extremes_keeper` |
-| 理论上界 / 下界：当前 S 下，最好的 b% 减最差的 b% | `strategy: oracle`，方向 `upper` / `lower` |
-| S(i) 的截面分布 | `metric`: `normal` / `lognormal` / `uniform` |
-| S(i) 随时间的随机过程 | `process`: `static` / `ar1` / `random_walk` |
-| 小流量 x% 再推到 100% | phase 的 `exposure`，从 `0.1` 到 `1.0` |
-| 真正的参数效应（默认没有） | `effect`: `null` / `constant_lift` |
-
-AB 是 `mean(treatment) - mean(control)`。`ab_claim` 用当前曝光样本，`ab_population` 用全体用户。AA 是群体均值相对开局的变化：`aa` 含测量层的处理效应，`aa_latent` 只含指标本身的时间过程。
-
-上下界不看 hash。在当前这批 `S` 上，任意分成两组、每组占 `arm_fraction`，最大 AB 是 `oracle_upper`，最小是 `oracle_lower`。页面上的参照界固定用 20%，和五组 hack 对齐。诚实 baseline 是两组各 50%，它自己的界更紧，不和 20% 的界画在一起。
-
-`oracle` 直接按 S 切尾部，流量层挡不住它，只作为参照。
-
-多个维护者对应多个流量层。层间 hash 独立，这里固定看其中一层。
-
-## 一轮里发生什么
-
-同一次运行里的几条对比共用一条 S 的路径，以及同一套曝光顺序。小流量用户是全量用户的嵌套子集，推全只加人。每条对比只有自己的分桶随机数。
-
-1. 若这个 phase 的 `evolve` 为真，先把 S 推进一步。
-2. 若 `strategy_active`，策略提出动作，流量层决定改不改 hash，然后策略看到新分桶。
-3. 策略给出 A/B。之后的保持或推全不再调用策略，分桶和 A/B 保持搜索结束时的样子。
-4. 记录 AB、AA 和上下界。
-
-动作和流量层：
-
-- `new_layer`：新开一层，两种系统都整层重抽。诚实 baseline 每轮都发这个。
-- `assign_all`：只给还没有 hash 的用户定桶。hackable 下再发一次不会改已有 hash。
-- `freeze_reshuffle`：hackable 留下冻结桶，只重抽其余用户；unhackable 忽略冻结，整层重抽。
-- `hold`：不动。
-
-## 运行
-
-```bash
-pip install numpy
-python3 server.py
+```
+src/abhack/
+  users/          write and read user_id
+  layer/          write the hash to CSV and check buckets
+  metric/         draw scores and check them
+  utils/hash.py           hash
+  utils/distributions.py  distributions
+  evaluate/       AB gain, AA gain, group bounds
+  strategies/     sticky hash, fresh splits, keep-extremes
+  process/        static, redraw, and AR(1) scores
+  study/          compare the four methods on one score path
+exp/run.py        run users, hashing, and scores from one file
+exp/study.py      run the AB / AA comparison
+exp/out/          default output directory
 ```
 
-打开 http://127.0.0.1:8765 。`--port` 可改端口。
+## Install
 
-页面默认用 3,000 位用户、10% 流量。五组 hack 里每组大约 60 个曝光用户，中间组重抽才容易出现更好或更差的桶，样本 AB 的抬升在图上看得清。`configs/` 里是 20,000 人：桶更大，同样的整桶替换抬不了多少，推全之后全体差值仍会回到 0 附近。
-
-页面有两个预设：
-
-- **小流量后推全**：S 不变，在 10% 上搜索，再推到 100%。hackable 上样本 AB 会被抬高，全体桶均值仍接近 0，推全后 claim 掉回去。AA 接近 0。
-- **冻结后随时间消退**：搜索时 S 不动，然后保持分组并让 S 按 AR(1) 回归。被抬高的 AB 会消退，AA 跟着群体均值走。
-
-命令行用同一套引擎，配置在 `configs/`：
+From the repository root:
 
 ```bash
-python -m ab_aa_lab list
-python -m ab_aa_lab run configs/static_selection.json
-python -m ab_aa_lab run configs/temporal_fade.json --plot
-python -m pytest tests -q
+pip install -e .
 ```
 
-`--plot` 需要 matplotlib。图分三栏：可行策略的 AB、oracle 的 AB、AA。实线是样本 claim，虚线是全体差值。
+Without installing, prefix commands with `PYTHONPATH=src`. `python exp/run.py` adds `src` to the path itself.
 
-全量上每个桶都很大，随机重分一次，桶均值会被压在总体均值附近，所以「整桶替换」到不了理论上界。它能做大的是小流量样本上的 AB。
+Requires Python 3.10+, numpy, and scipy.
 
-## 热插拔一个策略
+## Call the pieces
 
-新策略是一个类，三个方法，用装饰器登记。参照 `examples/custom_strategy.py`。
+Run these from the repository root. The examples write `exp/out/`.
+
+Write 100 users, `user_id` from `0` to `99`:
 
 ```python
-from ab_aa_lab.registry import strategies
-from ab_aa_lab.strategies.base import Strategy
-from ab_aa_lab.types import Action, Claim, Observation
+from abhack.users import generate_users, write_csv, read_csv
 
-@strategies.register("my_strategy")
-class MyStrategy(Strategy):
-    def __init__(self, n_buckets: int = 5):
-        self.n_buckets = n_buckets
-
-    @property
-    def arm_fraction(self) -> float:
-        return 1.0 / self.n_buckets
-
-    def act(self, obs: Observation) -> Action:
-        return Action(kind="assign_all", n_buckets=self.n_buckets)
-
-    def observe(self, obs: Observation) -> None:
-        return None
-
-    def claim(self, obs: Observation) -> Claim:
-        return Claim(control_bucket=0, treatment_bucket=1)
+ids = generate_users(100)
+write_csv(ids, "exp/out/users.csv")
+read_csv("exp/out/users.csv")[:8]
 ```
 
-配置里加上文件路径，路径相对该 JSON 所在目录：
+`write_csv(100, "exp/out/users.csv")` is the same call. A large count is written in chunks, so the ids do not all sit in memory first.
 
-```json
-{
-  "plugins": ["../examples/custom_strategy.py"],
-  "strategy": {"name": "peek_once", "n_buckets": 5}
-}
+Hash those users on a layer. The bucket id comes from `utils.hash`. `layer` only writes the file and checks it:
+
+```python
+from abhack.utils.hash import hash_buckets
+from abhack.layer import write_assignment, check_assignment_file
+
+hash_buckets(ids[:8], n_buckets=2, layer="layer0")
+write_assignment("exp/out/users.csv", "exp/out/layer0.csv", "layer0", 2)
+check_assignment_file("exp/out/users.csv", "exp/out/layer0.csv", "layer0", 2)
 ```
 
-`metric`、`process`、`policy`、`effect` 用同一套注册表。策略只能看到处理效应叠加之前的 S；`constant_lift` 只进入最后公布的 AB / AA。
+The check recomputes the hash and reports the count in each bucket. The file has two columns: `user_id,bucket`.
 
-一次 suite 里，各条对比只能改 `name`、`system`、`strategy`、`effect`。指标、时间过程和 phase 是共用的。
+Draw a score from a distribution. The column name is yours; here it is `ctr`:
+
+```python
+from abhack.utils.distributions import normal
+from abhack.metric import write_metric, check_metric_file
+
+score = normal(mu=0.0, sigma=1.0)
+score.sample(5, seed=0)
+write_metric("exp/out/users.csv", "exp/out/ctr.csv", "ctr", score, seed=0)
+check_metric_file("exp/out/ctr.csv", score, seed=0, name="ctr")
+```
+
+The check does two things: replay the same seed in user-file order, and compare the sample with the distribution. Other families are `uniform(low=0, high=10)`, `exponential(mean=2)`, and `bernoulli(p=0.3)`. With no arguments, `normal()` is standard normal, `uniform()` is `[0, 1)`, `exponential()` has mean 1, and `bernoulli()` has `p` 0.5.
+
+## Command line
+
+```bash
+python -m abhack.users -M 100000 -o exp/out/users.csv
+
+python -m abhack.layer -i exp/out/users.csv -o exp/out/layer0.csv --layer layer0 -k 2
+python -m abhack.layer --check -i exp/out/users.csv -b exp/out/layer0.csv --layer layer0 -k 2
+
+python -m abhack.metric -i exp/out/users.csv -o exp/out/ctr.csv \
+    --name ctr --dist normal --mu 0 --sigma 1 --seed 0
+python -m abhack.metric --check -i exp/out/ctr.csv \
+    --name ctr --dist normal --mu 0 --sigma 1 --seed 0
+```
+
+`--dist` is `normal`, `uniform`, `exponential`, or `bernoulli`. Add `--no-replay` to check the distribution without replaying the seed.
+
+## One file per experiment
+
+Experiments live in `exp/runs/`. One toml states the user count, the bucket count, named presets, and the scores to draw. A score can name a preset and override parameters, or it can set `dist` directly.
+
+```toml
+name = "demo"
+users = 10000
+buckets = 7
+layer = "layer0"
+
+[presets.standard_normal]
+dist = "normal"
+mu = 0
+sigma = 1
+
+[[scores]]
+name = "s"
+preset = "standard_normal"
+
+[[scores]]
+name = "shift"
+preset = "standard_normal"
+mu = 0.2
+sigma = 1.5
+
+[[scores]]
+name = "click"
+dist = "bernoulli"
+p = 0.5
+```
+
+The families are still `normal`, `uniform`, `exponential`, and `bernoulli`, defined in `src/abhack/utils/distributions.py`.
+
+```bash
+python exp/run.py
+python exp/run.py exp/runs/demo.toml
+python exp/run.py exp/runs/demo.toml -M 10000 -N 3
+```
+
+`-M` and `-N` override the user count and the bucket count in the file. Results go to `exp/out/<experiment name>/`: `users.csv`, the bucket CSV, one CSV per score, and a combined `scores.csv`. The dash in flags is the ASCII `-`. The script exits non-zero if the bucket check or any score check fails. `python -m abhack...` needs `pip install -e .`, or `PYTHONPATH=src` in front of the command.
+
+## AB, AA, and a sticky-hash hack
+
+Scores stay iid from the distribution in the file. A process can then move them: `static` leaves them put, `redraw` draws a new sample each round, and `ar1` is a mean-reverting shock (`phi`, `shock`).
+
+AB gain is mean(B) minus mean(A) on the current sample. AA gain is the population mean now minus the population mean at the start. The upper bound is the best current group's mean minus the worst, on that same sample. The lower bound is the reverse. Two-group AB is the default. The extremes hack uses five groups, 20% each.
+
+Four methods share one score path:
+
+- `honest` assigns a random arm every round and does not rename the better half to B.
+- `hackable` hashes once. The better bucket is called B. The same user stays in that bucket when traffic goes from x% to 100%.
+- `unhackable` draws a new split every time a user enters the layer. Picking the better side does not survive the next entry.
+- `extremes` keeps the best group and the worst group, reshuffles the middle, and replaces an extreme when a new group beats it.
+
+```bash
+python exp/study.py
+python exp/study.py exp/runs/hack.toml
+python exp/study.py exp/runs/hack.toml -M 20000 --traffic 0.1
+```
+
+`exp/runs/hack.toml` sets users, rounds, traffic, the score, and the process. Rows land in `exp/out/<name>/study.csv` with `ab`, `ab_full`, `aa`, `upper`, and `lower`. `ab` is the sample claim. `ab_full` is the same arm labels on every user.
