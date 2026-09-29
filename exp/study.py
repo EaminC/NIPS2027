@@ -76,7 +76,18 @@ def main(argv=None):
     with table.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(
-            ["round", "system", "agent", "ab", "ab_full", "aa", "upper", "lower"]
+            [
+                "round",
+                "system",
+                "agent",
+                "ab",
+                "ab_full",
+                "aa",
+                "select_upper",
+                "select_lower",
+                "assigned_upper",
+                "assigned_lower",
+            ]
         )
         for row in rows:
             writer.writerow(
@@ -87,8 +98,10 @@ def main(argv=None):
                     _cell(row.ab),
                     _cell(row.ab_full),
                     _cell(row.aa),
-                    _cell(row.upper),
-                    _cell(row.lower),
+                    _cell(row.select_upper),
+                    _cell(row.select_lower),
+                    _cell(row.assigned_upper),
+                    _cell(row.assigned_lower),
                 ]
             )
     print(
