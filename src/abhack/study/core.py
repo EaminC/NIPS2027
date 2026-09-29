@@ -8,16 +8,21 @@ Agent:
   honest -- no peeking; A/B is random each round
   hacker -- keep the best and worst groups, reshuffle the middle
 
-Theory upper / lower are not experiments. They are mean(best b%) minus
-mean(worst b%) by score on the sample (b = 1/groups), and the reverse.
-Any AB built from two groups of about that size sits at or below the upper.
+Theory bounds (not experiment arms):
+
+  select   -- mean(top b%) - mean(bottom b%) by score.
+              Absolute ceiling. Moves only if scores move.
+  assigned -- best - worst among groups the *system* made this round.
+              Hackable + static scores: flat.
+              Unhackable: redrawn every round, so this bound floats.
+              A remapping hack can beat assigned, but not select.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
 
-from abhack.evaluate import aa_gain, ab_gain, selection_bounds
+from abhack.evaluate import aa_gain, ab_gain, group_bounds, selection_bounds
 from abhack.process import advance
 from abhack.strategies import (
     honest_arm,
@@ -43,8 +48,10 @@ class RoundRow:
     ab: float
     ab_full: float
     aa: float
-    upper: float
-    lower: float
+    select_upper: float
+    select_lower: float
+    assigned_upper: float
+    assigned_lower: float
 
 
 def simulate(
@@ -59,7 +66,7 @@ def simulate(
     phi: float = 0.0,
     shock: float = 0.0,
 ) -> list[RoundRow]:
-    """One score path. Cells are system x agent. Bounds are the selection ceiling."""
+    """One score path. Cells are system x agent. Theory is select + assigned."""
     if users < groups:
         raise ValueError("need at least as many users as groups")
     if rounds < 1:
@@ -84,13 +91,14 @@ def simulate(
             scores = advance(scores, dist, process, rng, phi=phi, shock=shock)
 
         aa = aa_gain(start, scores)
-        # Same score sample → same selection ceiling for both systems this round.
-        upper, lower = selection_bounds(scores, seen, fraction)
+        select_upper, select_lower = selection_bounds(scores, seen, fraction)
+        # Unhackable: new system groups every round → assigned bound floats.
         fresh = unhackable_buckets(users, groups, rng)
         system_labels = {"hackable": sticky, "unhackable": fresh}
 
         for system in SYSTEMS:
             labels = system_labels[system]
+            assigned_upper, assigned_lower = group_bounds(scores, labels, seen)
 
             arm = honest_arm(users, rng)
             rows.append(
@@ -101,8 +109,10 @@ def simulate(
                     ab_gain(scores, arm, seen),
                     ab_gain(scores, arm, everyone),
                     aa,
-                    upper,
-                    lower,
+                    select_upper,
+                    select_lower,
+                    assigned_upper,
+                    assigned_lower,
                 )
             )
 
@@ -113,6 +123,7 @@ def simulate(
                     )
                 working = hacker_sticky
             else:
+                # Fresh system split each round; one keep-extremes step on top.
                 working = keep_extremes(scores, labels.copy(), groups, rng, seen)
             arm = label_best_worst(working, scores, seen)
             rows.append(
@@ -123,8 +134,10 @@ def simulate(
                     ab_gain(scores, arm, seen),
                     ab_gain(scores, arm, everyone),
                     aa,
-                    upper,
-                    lower,
+                    select_upper,
+                    select_lower,
+                    assigned_upper,
+                    assigned_lower,
                 )
             )
     return rows

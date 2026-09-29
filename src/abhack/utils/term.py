@@ -323,18 +323,18 @@ _CELL_COLOR = {
     ("unhackable", "hacker"): "1;33",
 }
 _SYSTEM_NOTE = {
-    "hackable": "System: layer hash is fixed once. The same user stays in the same group at 100%.",
-    "unhackable": "System: every entry into the layer draws a fresh random split.",
+    "hackable": "System: sticky hash. Assigned bound is flat while scores are static.",
+    "unhackable": "System: fresh split every entry. Assigned bound floats each round.",
 }
 _AGENT_NOTE = {
     "honest": "Agent: random A/B each round. Does not peek at scores.",
-    "hacker": "Agent: keep the best and worst groups, reshuffle the middle, claim best as B.",
+    "hacker": "Agent: keep best/worst, reshuffle middle. AB may beat assigned, not select.",
 }
 _SPARK = "▁▂▃▄▅▆▇█"
 
 
 def render_study(name, dist, process, users, traffic, rounds, groups, path, rows, seed: int = 0) -> str:
-    """2x2 of system x agent. Upper/lower are the selection ceiling."""
+    """2x2 of system x agent. Theory is select (absolute) + assigned (system groups)."""
     color = _color_on()
     by: dict[tuple[str, str], list] = {}
     for row in rows:
@@ -351,12 +351,11 @@ def render_study(name, dist, process, users, traffic, rounds, groups, path, rows
         f"  {_dim('score', color)}  {_hi(dist, color)}    {_dim('process', color)}  {_hi(process, color)}",
         f"  {_dim('file', color)}  {_dim(path, color)}",
         "",
-        f"  {_tag('System', '1;34', color)}  {_dim('hackable = sticky hash,  unhackable = reshuffle every entry', color)}",
-        f"  {_tag('Agent', '1;35', color)}  {_dim('honest = random A/B,  hacker = keep extremes', color)}",
+        f"  {_tag('Axes', '1;34', color)}  {_dim('hackable/unhackable = system,  honest/hacker = agent', color)}",
         f"  {_tag('AB', '1;36', color)}  {_dim('mean(B) - mean(A) on the current sample', color)}",
         f"  {_tag('AA', '1;32', color)}  {_dim('population mean now - population mean at the start', color)}",
-        f"  {_tag('Upper', '1;33', color)}  {_dim('theory best: mean(top b%) - mean(bottom b%) by score, b = 1/groups', color)}",
-        f"  {_tag('Lower', '1;34', color)}  {_dim('theory worst: the reverse; any group AB stays inside these', color)}",
+        f"  {_tag('Select', '1;33', color)}  {_dim('absolute top b% vs bottom b% by score', color)}",
+        f"  {_tag('Assigned', '1;36', color)}  {_dim('best vs worst system group this round (not the hacker remap)', color)}",
         "",
     ]
     for system in ("hackable", "unhackable"):
@@ -367,6 +366,7 @@ def render_study(name, dist, process, users, traffic, rounds, groups, path, rows
                 continue
             code = _CELL_COLOR[(system, agent)]
             last = series[-1]
+            assigned_series = [row.assigned_upper for row in series]
             lines.append(f"  {_tag(agent, code, color)}  {_dim(_AGENT_NOTE[agent], color)}")
             lines.append(
                 f"    {_dim('AB sample', color)}  {_paint(_num(last.ab), code, color)}"
@@ -374,12 +374,32 @@ def render_study(name, dist, process, users, traffic, rounds, groups, path, rows
                 f"    {_dim('AA', color)}  {_paint(_num(last.aa), '1;32', color)}"
             )
             lines.append(
-                f"    {_dim('theory upper', color)}  {_hi(_num(last.upper), color)}"
-                f"    {_dim('theory lower', color)}  {_hi(_num(last.lower), color)}"
                 f"    {_dim('AB over rounds', color)}  {_spark([row.ab for row in series], code, color)}"
+            )
+            lines.append(
+                f"    {_dim('select ±', color)}  {_hi(_num(last.select_upper), color)}"
+                f" / {_hi(_num(last.select_lower), color)}"
+            )
+            lines.append(
+                f"    {_dim('assigned now', color)}  {_paint(_num(last.assigned_upper), '1;36', color)}"
+                f" / {_paint(_num(last.assigned_lower), '1;36', color)}"
+                f"    {_dim('over rounds', color)}  {_spark(assigned_series, '1;36', color)}"
+                f"    {_dim('range', color)}  {_paint(_range_text(assigned_series), '1;36', color)}"
             )
         lines.append("")
     return "\n".join(lines).rstrip()
+
+
+def _range_text(values) -> str:
+    vals = np.asarray(list(values), dtype=float)
+    finite = vals[np.isfinite(vals)]
+    if finite.size == 0:
+        return "n/a"
+    lo = float(finite.min())
+    hi = float(finite.max())
+    if hi - lo < 1e-12:
+        return f"{_num(lo)} (flat)"
+    return f"{_num(lo)} .. {_num(hi)}"
 
 
 def _spark(values, code: str, color: bool) -> str:

@@ -34,7 +34,7 @@ flowchart TB
   subgraph Out["What we measure"]
     AB["AB = mean(B) − mean(A)<br/>on the current sample"]
     AA["AA = pop mean now − pop mean at start"]
-    Bound["Theory upper / lower<br/>mean(top b%) − mean(bottom b%)<br/>b = 1/groups, not an experiment arm"]
+    Bound["Two theory bounds<br/>Select: top b% vs bottom b%<br/>Partition: best vs worst system group"]
   end
 
   M --> L
@@ -50,9 +50,11 @@ flowchart TB
   O --> AB
   K --> AB
   S --> Bound
+  H --> Bound
+  U --> Bound
 ```
 
-Reading order: population and score on the left; each developer owns a layer with a fixed hash; traffic can grow from x% to 100%. The **system** decides whether that hash sticks. The **agent** decides whether A/B is random or a peeking hack. Theory upper/lower are the score selection ceiling (top b% vs bottom b%), not a fifth experiment arm.
+Reading order: population and score on the left; each developer owns a layer with a fixed hash; traffic can grow from x% to 100%. The **system** decides whether that hash sticks. The **agent** decides whether A/B is random or a peeking hack. Theory bounds are not experiment arms: **select** is the absolute best/worst b% by score; **partition** is best/worst among groups the system already assigned.
 
 ## One-command setup
 
@@ -118,13 +120,14 @@ Two axes, and they multiply.
 | **hackable** (sticky layer hash) | baseline on a sticky system | AB claim that can survive traffic rollout |
 | **unhackable** (reshuffle every entry) | baseline on a fresh split | AB claim that does not carry to the next entry |
 
-**Theory upper / lower are not experiments.** They are the selection ceiling on the current sample:
+**Theory bounds are not experiments.** There are two:
 
-- upper = mean(top b% by score) − mean(bottom b% by score)
-- lower = the reverse
-- b = 1 / groups (five groups → 20%)
+| bound | meaning |
+| --- | --- |
+| **select** | mean(top b% by score) − mean(bottom b%). Absolute ceiling. Moves only if scores move. |
+| **assigned** | best − worst among groups the **system** made this round. Hackable + static → flat. Unhackable → floats every round. |
 
-Any AB that puts about b% of users in B and about b% in A sits at or below the upper. Honest and hacker share this ceiling; only their AB numbers differ. The system decides whether a sticky hash can keep a high claim when traffic goes to 100%.
+b = 1 / groups. Honest and hacker share the same theory numbers for a system round. A remapping hack can beat **assigned** (that is the point of the hack) but must stay ≤ **select**. Do not move the theory bound to follow the hacker's remapped groups — that would make the bound equal AB by construction.
 
 AB gain is mean(B) − mean(A) on the current sample. AA gain is the population mean now minus the population mean at the start. Scores stay iid from the distribution in the file unless a process moves them: `static`, `redraw`, or `ar1` (`phi`, `shock`).
 
@@ -159,10 +162,10 @@ python exp/study.py exp/runs/hack.toml
 What to look for in the terminal / `exp/out/hack/study.csv`:
 
 1. **AA stays 0** — process is `static`, so the population mean does not move.
-2. **hackable × honest** — AB wanders near 0; theory upper is the top-b% vs bottom-b% ceiling.
-3. **hackable × hacker** — sample AB climbs but stays ≤ theory upper; `ab_full` is the same labels on 100% traffic.
-4. **unhackable × honest** — still near 0; same theory ceiling while scores are static.
-5. **unhackable × hacker** — sample AB can look large that round (still ≤ upper), but the next entry redraws groups.
+2. **hackable × honest** — AB near 0; **assigned** is flat under sticky + static scores.
+3. **hackable × hacker** — AB climbs and can sit **above assigned**; it must stay ≤ **select**. That gap is the sticky-hash hack.
+4. **unhackable × honest** — AB near 0; **assigned** floats every round with the fresh split.
+5. **unhackable × hacker** — AB can look large that round (still ≤ **select**), but the next entry redraws groups, so the claim does not stick.
 
 ## Example experiments
 
@@ -184,7 +187,7 @@ python exp/study.py exp/runs/hack.toml
 python exp/study.py exp/runs/ar1.toml -M 10000 --traffic 0.1
 ```
 
-`-M` / `--traffic` / `--rounds` / `--seed` override the file. The file `seed` is the default; pass `--seed 7` for another draw. Study rows go to `exp/out/<name>/study.csv` with columns `system`, `agent`, `ab`, `ab_full`, `aa`, `upper`, `lower`.
+`-M` / `--traffic` / `--rounds` / `--seed` override the file. The file `seed` is the default; pass `--seed 7` for another draw. Study rows go to `exp/out/<name>/study.csv` with columns `system`, `agent`, `ab`, `ab_full`, `aa`, `select_*`, `assigned_*`.
 
 ## Call the pieces
 

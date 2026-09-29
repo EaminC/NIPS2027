@@ -2,8 +2,11 @@
 
 AB: mean(B) - mean(A) on the current sample.
 AA: population mean now - population mean at the start.
-Theory upper / lower: mean(best b%) - mean(worst b%) by score on that sample
-(and the reverse). Any AB that picks two groups of size about b% cannot exceed this.
+
+Two theory bounds:
+  selection_bounds -- mean(top b%) - mean(bottom b%) by score.
+                     Assumes the best people can all sit in B.
+  group_bounds     -- best group - worst group on an already assigned partition.
 """
 
 import numpy as np
